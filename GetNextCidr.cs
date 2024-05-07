@@ -41,9 +41,9 @@ namespace UniversityOfSouthWales
             public required string ID { get; set; }
             public required string Type { get; set; }
             public required string Location { get; set; }
-            public required string AddressSpace { get; set; }
             public required string ProposedCIDR { get; set; }
         }
+
         public class CustomError {
             public required string Code { get; set; }
             public required string Message { get; set; }
@@ -55,19 +55,17 @@ namespace UniversityOfSouthWales
 
             // Check for valid input
             string[] requiredParameters = { "subscriptionId", "virtualNetworkName", "resourceGroupName", "cidr" };
-            string missingParameter = requiredParameters.FirstOrDefault(parameter => string.IsNullOrWhiteSpace(req.Query[parameter]));
+            string? missingParameter = requiredParameters.FirstOrDefault(parameter => string.IsNullOrWhiteSpace(req.Query[parameter]));
             if(missingParameter != null) return ResultError($"{missingParameter} is null or empty", HttpStatusCode.BadRequest);
 
             // Get the query parameters
             string subscriptionId = req.Query["subscriptionId"];
-            string vnetName = req.Query["virtualNetworkName"];
-            string rgName = req.Query["resourceGroupName"];
-            string cidrString = req.Query["cidr"];
-            string desiredAddressSpace = req.Query["addressSpace"];
+            string vnetName       = req.Query["virtualNetworkName"];
+            string rgName         = req.Query["resourceGroupName"];
+            string cidrString     = req.Query["cidr"];
 
             // Validate the CIDR block and CIDR size
             if (!ValidateCIDR(cidrString)) return ResultError("Invalid CIDR size requested: " + cidrString);
-            if (!ValidateCIDRBlock(desiredAddressSpace)) return ResultError("desiredAddressSpace is invalid");
 
             ResourceGroupResource rg;
             VirtualNetworkResource vNet;
@@ -86,37 +84,23 @@ namespace UniversityOfSouthWales
                 return ResultError(e.ToString(), HttpStatusCode.InternalServerError);
             }
 
-            byte cidr = Byte.Parse(cidrString);
-            foreach (string ip in vNet.Data.AddressPrefixes) {
-                IPNetwork2 vNetCIDR = IPNetwork2.Parse(ip);
-                if (cidr >= vNetCIDR.Cidr && (null == desiredAddressSpace || vNetCIDR.ToString().Equals(desiredAddressSpace))) {
-                    string foundSubnet = GetValidSubnetIfExists(vNet, vNetCIDR, cidr);
-                    string foundAddressSpace = vNetCIDR.ToString();
-
-                    if (foundSubnet != null) {
-                        return ResultSuccess(vNet, vnetName, foundSubnet, foundAddressSpace);
-                    }
-                }
-            }
+            byte cidr = byte.Parse(cidrString);
 
             var matchingPrefixes = vNet.Data.AddressPrefixes
                 .Select(prefix => IPNetwork2.Parse(prefix))
-                .Where(vNetCIDR => cidr >= vNetCIDR.Cidr && (desiredAddressSpace == null || vNetCIDR.ToString().Equals(desiredAddressSpace)));
+                .Where(vNetCIDR => cidr >= vNetCIDR.Cidr);
 
+            if (cidr == 28) matchingPrefixes.Reverse(); // if cidr is 28 flip the order
+            
             foreach (var vNetCIDR in matchingPrefixes) {
-                string foundSubnet = GetValidSubnetIfExists(vNet, vNetCIDR, cidr);
-                string foundAddressSpace = vNetCIDR.ToString();
-
-                if (foundSubnet != null) return ResultSuccess(vNet, vnetName, foundSubnet, foundAddressSpace);
+                string? foundSubnet = GetValidSubnetIfExists(vNet, vNetCIDR, cidr);
+                if (foundSubnet != null) return ResultSuccess(vNet, foundSubnet);
             }
-
-
-            string errMsg = desiredAddressSpace == null 
-                ? "VNet " + rgName + "/" + vnetName + " cannot accept a subnet of size " + cidr 
-                : "Requested address space (" + desiredAddressSpace + ") not found in VNet " + rgName + "/" + vnetName;
-
+            
+            string errMsg = "VNet " + rgName + "/" + vnetName + " cannot accept a subnet of size " + cidr;
             return ResultError(errMsg, HttpStatusCode.NotFound);
         }
+
         private static BadRequestObjectResult ResultError(string errorMessage, HttpStatusCode httpStatusCode = HttpStatusCode.BadRequest) {
             var customError = new CustomError {
                 Code = "" + ((int)httpStatusCode),
@@ -128,14 +112,14 @@ namespace UniversityOfSouthWales
 
             return new BadRequestObjectResult(jsonString);;
         }
-        private static OkObjectResult ResultSuccess(VirtualNetworkResource vNet, string virtualNetworkName, string foundSubnet, string foundAddressSpace) {
+
+        private static OkObjectResult ResultSuccess(VirtualNetworkResource vNet, string foundSubnet) {
             ProposedSubnetResponse proposedSubnetResponse = new ProposedSubnetResponse() {
-                Name = virtualNetworkName,
+                Name = vNet.Data.Name,
                 ID = vNet.Id,
                 Type = vNet.Id.ResourceType,
                 Location = vNet.Data.Location,
-                ProposedCIDR = foundSubnet,
-                AddressSpace = foundAddressSpace
+                ProposedCIDR = foundSubnet
             };
 
             var options = new JsonSerializerOptions { WriteIndented = true };
@@ -144,22 +128,19 @@ namespace UniversityOfSouthWales
             return new OkObjectResult(jsonString);
         }
 
-        private static bool ValidateCIDRBlock(string inCIDRBlock) {
-            if (inCIDRBlock == null) return true; // no address space specified (ok as optional)
-
-            try { IPNetwork2.Parse(inCIDRBlock); }
-            catch { return false; }
-
-            return true;
-        }
-
-        private static bool ValidateCIDR(string inCIDR) {
-            if (Byte.TryParse(inCIDR, out global::System.Byte cidr)) return 2 <= cidr && 29 >= cidr;
+        private static bool ValidateCIDR(string? inCIDR) {
+            if (byte.TryParse(inCIDR, out byte cidr)) return 2 <= cidr && 29 >= cidr;
             else return false;
         }
 
-        private static string GetValidSubnetIfExists(VirtualNetworkResource vNet, IPNetwork2 requestedCIDR, byte cidr) {
+        private static string? GetValidSubnetIfExists(VirtualNetworkResource vNet, IPNetwork2 requestedCIDR, byte cidr) {
             List<IPNetwork2> subnets = vNet.GetSubnets().Select(subnet => IPNetwork2.Parse(subnet.Data.AddressPrefix)).ToList();
+
+            // 28 - small - bottom up
+            // 27 - big   - top down
+
+            if (cidr == 28) subnets.Reverse(); // if cidr is 28 flip the order
+
             // Iterate through each candidate subnet
             foreach (IPNetwork2 candidateSubnet in requestedCIDR.Subnet(cidr)) {
                 // Check if the candidate subnet overlaps with any existing subnet
