@@ -86,14 +86,23 @@ namespace UniversityOfSouthWales
 
             byte cidr = byte.Parse(cidrString);
 
-            var matchingPrefixes = vNet.Data.AddressPrefixes
+            // if cidr is 28 flip the order
+            bool reverseSearchOrder = cidrString == "28";
+
+            IEnumerable<IPNetwork2> matchingPrefixes = vNet.Data.AddressPrefixes
                 .Select(prefix => IPNetwork2.Parse(prefix))
                 .Where(vNetCIDR => cidr >= vNetCIDR.Cidr);
 
-            if (cidr == 28) matchingPrefixes.Reverse(); // if cidr is 28 flip the order
+            matchingPrefixes = matchingPrefixes.OrderBy(vNetCIDR => vNetCIDR.Cidr);
+            if (reverseSearchOrder) matchingPrefixes = matchingPrefixes.Reverse();
             
             foreach (var vNetCIDR in matchingPrefixes) {
-                string? foundSubnet = GetValidSubnetIfExists(vNet, vNetCIDR, cidr);
+                IEnumerable<IPNetwork2> subnetCollection = vNetCIDR.Subnet(cidr);
+
+                subnetCollection = subnetCollection.OrderBy(subnet => subnet.Cidr);
+                if (reverseSearchOrder) subnetCollection = subnetCollection.Reverse();
+
+                string? foundSubnet = GetValidSubnetIfExists(vNet, subnetCollection);
                 if (foundSubnet != null) return ResultSuccess(vNet, foundSubnet);
             }
             
@@ -133,16 +142,11 @@ namespace UniversityOfSouthWales
             else return false;
         }
 
-        private static string? GetValidSubnetIfExists(VirtualNetworkResource vNet, IPNetwork2 requestedCIDR, byte cidr) {
+        private static string? GetValidSubnetIfExists(VirtualNetworkResource vNet, IEnumerable<IPNetwork2> subnetCollection) {
             List<IPNetwork2> subnets = vNet.GetSubnets().Select(subnet => IPNetwork2.Parse(subnet.Data.AddressPrefix)).ToList();
 
-            // 28 - small - bottom up
-            // 27 - big   - top down
-
-            if (cidr == 28) subnets.Reverse(); // if cidr is 28 flip the order
-
             // Iterate through each candidate subnet
-            foreach (IPNetwork2 candidateSubnet in requestedCIDR.Subnet(cidr)) {
+            foreach (IPNetwork2 candidateSubnet in subnetCollection) {
                 // Check if the candidate subnet overlaps with any existing subnet
                 if (!subnets.Any(subnet => subnet.Overlap(candidateSubnet)))
                     return candidateSubnet.ToString(); // Found a valid subnet, return it
