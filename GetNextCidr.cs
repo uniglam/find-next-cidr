@@ -85,6 +85,8 @@ namespace UniversityOfSouthWales
             }
 
             byte cidr = byte.Parse(cidrString);
+
+            // if cidr is 28 flip the order
             bool reverseSearchOrder = cidrString == "28";
 
             IEnumerable<IPNetwork2> matchingPrefixes = vNet.Data.AddressPrefixes
@@ -92,13 +94,13 @@ namespace UniversityOfSouthWales
                 .Where(vNetCIDR => cidr >= vNetCIDR.Cidr);
 
             matchingPrefixes = matchingPrefixes.OrderBy(vNetCIDR => vNetCIDR.Cidr);
-            if (reverseSearchOrder) matchingPrefixes = matchingPrefixes.Reverse(); // if cidr is 28 flip the order
+            if (reverseSearchOrder) matchingPrefixes = matchingPrefixes.Reverse();
             
             foreach (var vNetCIDR in matchingPrefixes) {
                 IEnumerable<IPNetwork2> subnetCollection = vNetCIDR.Subnet(cidr);
 
                 subnetCollection = subnetCollection.OrderBy(subnet => subnet.Cidr);
-                if (reverseSearchOrder) subnetCollection = subnetCollection.Reverse(); // if cidr is 28 flip the order
+                if (reverseSearchOrder) subnetCollection = subnetCollection.Reverse();
 
                 string? foundSubnet = GetValidSubnetIfExists(vNet, subnetCollection);
                 if (foundSubnet != null) return ResultSuccess(vNet, foundSubnet);
